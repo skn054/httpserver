@@ -15,6 +15,7 @@
 
  #define MYPORT "8080" // the port users will be connecting to
  #define BACKLOG 10 // how many pending connections queue will hold
+ #define BUFF_SIZE 4096
 
  /***
   * 
@@ -38,6 +39,69 @@
     unsigned char sin_zero[8]; // Same size as struct sockaddr
     };
   */
+
+ char* read_data_into_buffer(char *filepath,long *file_size){
+
+    FILE *ptr = NULL;
+    long f_size = 0;
+    size_t bytes_read = 0;
+
+    ptr = fopen(filepath,"rb");
+    if(ptr == NULL){
+        perror("Error opening file");
+        return NULL;
+    }
+    /** determine file size */
+    if(fseek(ptr,0,SEEK_END)!=0){
+        perror("Error seeking to end of file");
+        fclose(file_ptr);
+        return NULL;
+    }
+    f_size = ftell(ptr);
+    if(f_size == -1){
+        perror("Error getting file size with ftell");
+        fclose(file_ptr);
+        return NULL;
+    }
+    /** reset ptr to start  */
+    if(fseek(ptr,0,SEEK_SET)!=0){
+         perror("Error seeking to beginning of file");
+        fclose(file_ptr);
+        return NULL;
+    }
+
+    char *buffer = malloc(f_size);
+    if(buffer == NULL){
+        fprintf(stderr, "Error: Could not allocate memory for file buffer (%ld bytes).\n", file_size);
+        fclose(file_ptr);
+        return NULL;
+    }
+
+    /** copy content of file into buffer */
+    bytes_read = fread(buffer,1,f_size,ptr);
+    if(bytes_read < (size_t)f_size){
+        if(feof(ptr)){
+             fprintf(stderr, "Error reading file: Unexpected end of file for '%s'. Expected %ld, got %zu.\n", filepath, f_size, bytes_read);
+        }else if(ferror(ptr)){
+             perror("Error reading file");
+        }else{
+            fprintf(stderr, "Error reading file: Unknown error. Expected %ld, got %zu for '%s'.\n", f_size, bytes_read, filepath);
+        }
+
+        free(buffer);
+        close(ptr);
+        return NULL;
+    }
+
+    if(fclose(ptr) == EOF){
+        perror("Error closing file");
+    }
+    
+    *file_size = f_size;
+
+    return buffer;
+
+ }
  void main(){
 
         int status,socket_id;
@@ -56,6 +120,10 @@
                         "\r\n"                   // Blank line separating headers from body
                         "Hello World!";
         int len_message = strlen(message);
+
+        char buffer[4096];
+        char method[16];
+        char path[256];
 
         if((status = getaddrinfo(NULL,MYPORT,&hints,&servinfo)!=0)){
             fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
@@ -99,7 +167,72 @@
             }
 
             /** receive some data */
+            int bytes_read = recv(socket_id,buffer,BUFF_SIZE-1,0);
+            if(bytes_read == -1){
+                perror("cannot read data error");
+                freeaddrinfo(servinfo);
+                close(socket_id);
+                exit(1); // Or handle differently
+            }
+            /** The very first line is the most critical for basic routing. It looks like: GET / HTTP/1.1\r\n or GET /somepage.html HTTP/1.1\r\n. */
+            buffer[BUFF_SIZE ] = '\0';
+            
+            // printf("%s", buffer);
+            /** strtok modifies the string, create a copy of string for parsing. */
+            char *request_copy = strdup(buffer);
+            if(!request_copy){
+                perror("failed creating copy of header request");
+                freeaddrinfo(servinfo);
+                close(socket_id);
+                exit(1);
+            }
+            char *line = strtok(request_copy,"\r\n");
+            if(!line){
+                free(request_copy);
+                freeaddrinfo(servinfo);
+                close(socket_id);
+                exit(1);
 
+            }
+            char *method = strtok(line," ");
+            char *path   = strtod(line," ");
+            
+            if(!method || !path){
+                free(request_copy);
+                freeaddrinfo(servinfo);
+                close(socket_id);
+                exit(1);
+            }
+
+            if(strcmp(method,"GET")==0 && strcmp(path,"/")==0){
+                    const *filepath =  "public/index.html";
+                    long file_len = 0;
+
+                    char *file_data = read_data_into_buffer(filepath,&file_len);
+                    if(!file_data){
+                        const char *not_found_response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+                        send(client_fd, not_found_response, strlen(not_found_response), 0);
+                    }else{
+                        char response_headers[512];
+                    int header_len = snprintf(response_headers, sizeof(response_headers),
+                         "HTTP/1.1 200 OK\r\n"
+                         "Content-Type: text/html\r\n"
+                         "Content-Length: %ld\r\n"
+                         "\r\n", // Blank line
+                         file_len);
+
+                    send(socket_id,response_headers,header_len,0);
+                    send(socket_id,file_data,file_len,0);
+                    free(file_data);
+                    }
+                    
+            }
+
+            
+
+
+
+            /** parser the request and find out hhtp method and path */
 
             /** send somr data */
 
@@ -114,7 +247,7 @@
             }
 
         
-
+            free(request_copy);
             close(new_fd);
 
         }
