@@ -54,7 +54,7 @@ gcc httpserver.c -o httpserver
 ./httpserver
 By default, the server will attempt to listen on port 8080
 
-##Testing
+## Testing
 
 Once the server is running, you can test it using:
 Web Browser:
